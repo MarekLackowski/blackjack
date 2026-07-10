@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Blackjack</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <script>
+    // Czyszczenie pozostałości PeerJS przy każdym załadowaniu strony
+    (function() {
+        // Wyczyść localStorage z kluczami PeerJS
+        const keysToRemove = [];
+        for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (key && key.startsWith('peerjs')) {
+                keysToRemove.push(key);
+            }
+        }
+        keysToRemove.forEach(key => {
+            try { localStorage.removeItem(key); } catch(e) {}
+        });
+        if (keysToRemove.length > 0) {
+            console.log('[CLEANUP] Removed localStorage keys:', keysToRemove);
+        }
+    })();
+    </script>
+</head>
+<body>
+    <div id="app">
+        <!-- MENU GŁÓWNE -->
+        <div id="menu-screen" class="screen active">
+            <div class="menu-container">
+                <h1 class="game-title">♠ ♥ BLACKJACK ♣ ♦</h1>
+                <div class="menu-buttons">
+                    <button class="menu-btn btn-primary" onclick="showScreen('singleplayer-screen')">🎮 Singleplayer</button>
+                    <button class="menu-btn btn-secondary" onclick="showScreen('multiplayer-menu-screen')">👥 Multiplayer</button>
+                    <button class="menu-btn btn-info" onclick="showRules()">📜 Zasady</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- SINGLEPLAYER -->
+        <div id="singleplayer-screen" class="screen">
+            <div class="game-table">
+                <div class="table-header">
+                    <button class="back-btn" onclick="showScreen('menu-screen')">← Menu</button>
+                    <div class="game-mode-label">Singleplayer</div>
+                </div>
+                
+                <div class="dealer-area">
+                    <div class="player-label">Dealer</div>
+                    <div class="dealer-status" id="dealer-status"></div>
+                    <div class="cards-container" id="dealer-cards"></div>
+                    <div class="score" id="dealer-score"></div>
+                </div>
+
+                <div class="table-center">
+                    <div class="pot-area" id="pot-area"></div>
+                    <div class="message-area" id="game-message"></div>
+                </div>
+
+                <div class="player-area">
+                    <div class="player-label" id="player-name">Gracz</div>
+                    <div class="cards-container" id="player-cards"></div>
+                    <div class="score" id="player-score"></div>
+                </div>
+
+                <div class="controls-area">
+                    <div class="chips-info">
+                        <div class="chips-display">💰 <span id="player-chips">500</span></div>
+                        <div class="bet-display">🎯 Bet: <span id="current-bet">0</span></div>
+                    </div>
+                    <div class="betting-controls" id="betting-controls">
+                        <button class="chip-btn chip-10" onclick="placeBet(10)">10</button>
+                        <button class="chip-btn chip-25" onclick="placeBet(25)">25</button>
+                        <button class="chip-btn chip-50" onclick="placeBet(50)">50</button>
+                        <button class="chip-btn chip-100" onclick="placeBet(100)">100</button>
+                        <button class="action-btn btn-clear" onclick="clearBet()">Wyczyść</button>
+                        <button class="action-btn btn-deal" onclick="deal()">Rozdaj</button>
+                    </div>
+                    <div class="game-controls" id="game-controls" style="display:none">
+                        <button class="action-btn btn-hit" onclick="playerHit()">Hit</button>
+                        <button class="action-btn btn-stand" onclick="playerStand()">Stand</button>
+                        <button class="action-btn btn-double" id="btn-double" onclick="playerDouble()">Double</button>
+                        <button class="action-btn btn-split" id="btn-split" onclick="playerSplit()" style="display:none">Split</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- MULTIPLAYER MENU -->
+        <div id="multiplayer-menu-screen" class="screen">
+            <div class="menu-container">
+                <h1 class="game-title">Multiplayer</h1>
+                <div class="menu-buttons">
+                    <button class="menu-btn btn-primary" onclick="createGame()">➕ Stwórz grę</button>
+                    <button class="menu-btn btn-secondary" onclick="showScreen('join-game-screen')">🔗 Dołącz do gry</button>
+                    <button class="menu-btn btn-back" onclick="showScreen('menu-screen')">← Wróć</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- DOŁĄCZ DO GRY -->
+        <div id="join-game-screen" class="screen">
+            <div class="menu-container">
+                <h2>Dołącz do gry</h2>
+                <div class="code-input-area">
+                    <input type="text" id="join-code" maxlength="6" placeholder="Kod 6-znakowy" class="code-input">
+                    <button class="menu-btn btn-primary" onclick="joinGame()">Dołącz</button>
+                </div>
+                <div id="join-error" class="error-message"></div>
+                <button class="menu-btn btn-back" onclick="showScreen('multiplayer-menu-screen')">← Wróć</button>
+            </div>
+        </div>
+
+        <!-- LOBBY -->
+        <div id="lobby-screen" class="screen">
+            <div class="lobby-container">
+                <h2>Lobby</h2>
+                <div class="lobby-info">
+                    <div class="lobby-code">Kod gry: <span id="lobby-code-display">------</span></div>
+                    <div class="lobby-players">Gracze: <span id="lobby-players-count">1</span>/4</div>
+                </div>
+                <div class="lobby-players-list" id="lobby-players-list"></div>
+                <div class="lobby-actions">
+                    <button class="menu-btn btn-primary" id="btn-start-game" onclick="startMultiplayerGame()" style="display:none">Rozpocznij grę</button>
+                    <button class="menu-btn btn-back" onclick="leaveLobby()">Opuść lobby</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- MULTIPLAYER GAME -->
+        <div id="multiplayer-game-screen" class="screen">
+            <div class="game-table">
+                <div class="table-header">
+                    <button class="back-btn" onclick="leaveGame()">← Wyjdź</button>
+                    <div class="game-mode-label">Multiplayer</div>
+                    <div class="mp-code">Kod: <span id="mp-code">------</span></div>
+                </div>
+                
+                <div class="dealer-area">
+                    <div class="player-label">Dealer</div>
+                    <div class="dealer-status" id="mp-dealer-status"></div>
+                    <div class="cards-container" id="mp-dealer-cards"></div>
+                    <div class="score" id="mp-dealer-score"></div>
+                </div>
+
+                <div class="table-center">
+                    <div class="message-area" id="mp-message"></div>
+                </div>
+
+                <!-- WSZYSCY GRACZE NA DOLE -->
+                <div class="mp-all-players" id="mp-all-players"></div>
+
+                <div class="controls-area">
+                    <div class="chips-info" id="mp-chips-info">
+                        <div class="chips-display">💰 <span id="mp-my-chips">500</span></div>
+                        <div class="bet-display">🎯 Bet: <span id="mp-my-bet">0</span></div>
+                    </div>
+                    <div class="betting-controls" id="mp-betting-controls">
+                        <button class="chip-btn chip-10" onclick="mpPlaceBet(10)">10</button>
+                        <button class="chip-btn chip-25" onclick="mpPlaceBet(25)">25</button>
+                        <button class="chip-btn chip-50" onclick="mpPlaceBet(50)">50</button>
+                        <button class="chip-btn chip-100" onclick="mpPlaceBet(100)">100</button>
+                        <button class="action-btn btn-clear" onclick="mpClearBet()">Wyczyść</button>
+                        <button class="action-btn btn-deal" onclick="mpDeal()">Postaw</button>
+                    </div>
+                    <div class="game-controls" id="mp-game-controls" style="display:none">
+                        <button class="action-btn btn-hit" onclick="mpHit()">Hit</button>
+                        <button class="action-btn btn-stand" onclick="mpStand()">Stand</button>
+                        <button class="action-btn btn-double" id="mp-btn-double" onclick="mpDouble()">Double</button>
+                        <button class="action-btn btn-split" id="mp-btn-split" onclick="mpSplit()" style="display:none">Split</button>
+                    </div>
+                    <div class="insurance-controls" id="mp-insurance-controls" style="display:none">
+                        <div class="insurance-text">Dealer ma Asa! Insurance?</div>
+                        <button class="action-btn btn-insurance-yes" onclick="mpTakeInsurance()">Tak (1/2 bet)</button>
+                        <button class="action-btn btn-insurance-no" onclick="mpDeclineInsurance()">Nie</button>
+                    </div>
+                    <div class="waiting-message" id="mp-waiting" style="display:none"></div>
+                    <div class="mp-hint-display" id="mp-hint-display" style="display:none"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ZASADY -->
+        <div id="rules-modal" class="modal" style="display:none">
+            <div class="modal-content">
+                <span class="close-btn" onclick="hideRules()">&times;</span>
+                <h2>Zasady Blackjacka</h2>
+                <div class="rules-content">
+                    <h3>Cel gry</h3>
+                    <p>Zbliż się jak najbardziej do 21 punktów, nie przekraczając tej liczby.</p>
+                    
+                    <h3>Wartość kart</h3>
+                    <ul>
+                        <li>Karty 2-10: wartość nominalna</li>
+                        <li>Walet, Dama, Król: 10 punktów</li>
+                        <li>As: 1 lub 11 punktów (wybiera się wartość korzystniejszą)</li>
+                    </ul>
+                    
+                    <h3>Akcje</h3>
+                    <ul>
+                        <li><strong>Hit</strong> - dobierz kartę</li>
+                        <li><strong>Stand</strong> - zakończ turę</li>
+                        <li><strong>Double Down</strong> - podwój zakład i dobierz jedną kartę</li>
+                        <li><strong>Split</strong> - podziel parę na dwie ręce (singleplayer)</li>
+                    </ul>
+                    
+                    <h3>Wygrana</h3>
+                    <ul>
+                        <li>Blackjack (As + 10) wygrywa 3:2</li>
+                        <li>Normalna wygrana wygrywa 1:1</li>
+                        <li>Remis (push) - zwraca zakład</li>
+                        <li>Przekroczenie 21 = przegrana</li>
+                    </ul>
+                    
+                    <h3>Dealer</h3>
+                    <p>Dealer dobiera do 16 i stoi na 17+ (soft 17 - dealer hit).</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="game.js"></script>
+    <script src="peer.js"></script>
+    <script src="main.js"></script>
+</body>
+</html>
