@@ -10,6 +10,16 @@ const PEER_CONFIG = {
                 urls: 'turn:openrelay.metered.ca:80',
                 username: 'openrelayproject',
                 credential: 'openrelayproject'
+            },
+            {
+                urls: 'turn:openrelay.metered.ca:443',
+                username: 'openrelayproject',
+                credential: 'openrelayproject'
+            },
+            {
+                urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+                username: 'openrelayproject',
+                credential: 'openrelayproject'
             }
         ]
     }
@@ -179,7 +189,13 @@ function mpSetupConn(conn) {
     }
     mpConns.push(conn);
     console.log('[MP] Connection added, total:', mpConns.length);
-    
+
+    if (conn.peerConnection) {
+        conn.peerConnection.addEventListener('iceconnectionstatechange', () => {
+            console.log('[MP] ICE state for', conn.peer, ':', conn.peerConnection.iceConnectionState);
+        });
+    }
+
     function onConnOpen() {
         console.log('[MP] Conn open handler for:', conn.peer);
         if (mpIsHost) {
