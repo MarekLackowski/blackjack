@@ -520,6 +520,22 @@ body {
     margin-bottom: 5px;
 }
 
+.mp-player-bet-chips {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 2px;
+    min-height: 18px;
+    margin-bottom: 5px;
+}
+
+.mp-player-bet-chips .chip {
+    width: 18px;
+    height: 18px;
+    border-width: 2px;
+    font-size: 0.5rem;
+}
+
 .mp-player-cards {
     display: flex;
     gap: -15px;

@@ -45,6 +45,7 @@ let mpHintsEnabled = false; // Podpowiedzi Basic Strategy
 let mpDotKeyCount = 0; // Licznik klawisza '.'
 let mpDotKeyTimer = null; // Timer resetu licznika
 let mpCurrentSplitHand = {}; // Śledzenie aktualnej ręki split per gracz (pid -> handIndex)
+let mpBetChipsSettled = new Set(); // Gracze, których żetony zakładu już "odleciały" po rozliczeniu rundy (nie odbudowuj do nowej rundy)
 
 // ===================== BASIC STRATEGY HINTS =====================
 
@@ -462,6 +463,7 @@ function mpHandleData(fromId, data) {
             mpCurrentPlayerId = null;
             mpLastRenderedHandCount = {};
             mpLastDealerHandCount = 0;
+            mpBetChipsSettled.clear();
             mpDealerHand = data.dealer || [];
             for (const pid in data.hands || {}) {
                 if (mpAllPlayers[pid]) {
@@ -567,6 +569,7 @@ function mpHandleData(fromId, data) {
                 }
             }
             mpUpdateGameUI();
+            mpAnimateResultsChips(data.results);
             if (data.results[mpMyId] && data.results[mpMyId].message) {
                 mpShowMessage(data.results[mpMyId].message);
             }
@@ -624,6 +627,7 @@ function mpHandleData(fromId, data) {
             mpCurrentPlayerId = null;
             mpLastRenderedHandCount = {};
             mpLastDealerHandCount = 0;
+            mpBetChipsSettled.clear();
             for (const pid in mpAllPlayers) {
                 mpAllPlayers[pid].bet = 0;
                 mpAllPlayers[pid].insurance = null;
@@ -704,8 +708,9 @@ function startMultiplayerGame() {
     mpGameStarted = true;
     mpPhase = 'betting';
     mpLastRenderedHandCount = {};
+    mpBetChipsSettled.clear();
     mpDealerHand = [];
-    
+
     for (const pid in mpAllPlayers) {
         mpAllPlayers[pid].hand = [];
         mpAllPlayers[pid].bet = 0;
@@ -764,7 +769,7 @@ function mpPlaceBet(amount) {
     }
     
     me.bet += amount;
-    
+
     // Synchronizuj bet z innymi graczami
     if (!mpIsHost) {
         const hostConn = mpConns[0];
@@ -774,7 +779,16 @@ function mpPlaceBet(amount) {
     } else {
         mpBroadcast({ type: 'state', players: mpAllPlayers });
     }
-    
+
+    // Animuj żeton lecący z klikniętego przycisku do własnego stosu zakładu
+    const mySlot = document.querySelector(`.mp-player-slot[data-player-id="${mpMyId}"]`);
+    const betChipsEl = mySlot ? mySlot.querySelector('.mp-player-bet-chips') : null;
+    const sourceBtn = document.querySelector(`#mp-betting-controls .chip-btn.chip-${amount}`);
+    if (betChipsEl) {
+        flyChip(amount, sourceBtn, betChipsEl, true);
+        if (mySlot) mySlot.dataset.betKey = String(me.bet);
+    }
+
     mpUpdateGameUI();
 }
 
@@ -1463,7 +1477,9 @@ function mpResetRound() {
     mpDealerHand = [];
     mpLastRenderedHandCount = {};
     mpLastDealerHandCount = 0;
-    
+    mpBetChipsSettled.clear();
+
+
     for (const pid in mpAllPlayers) {
         mpAllPlayers[pid].bet = 0;
         mpAllPlayers[pid].insurance = null;
@@ -1572,6 +1588,27 @@ function mpUpdateDealerCardsOnly() {
     }
 }
 
+// Animuje żetony zakładu każdego gracza w stronę jego licznika (wygrana/push) lub w stronę dealera (przegrana)
+function mpAnimateResultsChips(results) {
+    const dealerAreaEl = document.getElementById('mp-dealer-cards');
+    for (const pid in results) {
+        const slot = document.querySelector(`.mp-player-slot[data-player-id="${pid}"]`);
+        if (!slot) continue;
+        const betChipsEl = slot.querySelector('.mp-player-bet-chips');
+        if (!betChipsEl || betChipsEl.children.length === 0) continue;
+
+        const status = results[pid].status;
+        if (status === 'lose' || status === 'bust') {
+            flyContainerChipsTo(betChipsEl, dealerAreaEl);
+        } else if (status === 'win' || status === 'blackjack' || status === 'push') {
+            const chipsTargetEl = slot.querySelector('.mp-player-chips');
+            flyContainerChipsTo(betChipsEl, chipsTargetEl);
+        }
+        // Pozwól kolejnej rundzie odbudować stos zakładu od zera (dopóki mpBetChipsSettled nie zostanie wyczyszczone)
+        mpBetChipsSettled.add(pid);
+    }
+}
+
 function mpUpdateGameUI() {
     const container = document.getElementById('mp-all-players');
     
@@ -1625,6 +1662,7 @@ function mpUpdateGameUI() {
                 <div class="mp-player-name"></div>
                 <div class="mp-player-chips"></div>
                 <div class="mp-player-bet"></div>
+                <div class="mp-player-bet-chips"></div>
                 <div class="mp-player-hands"></div>
                 <div class="mp-player-status"></div>
             `;
@@ -1658,20 +1696,34 @@ function mpUpdateGameUI() {
             slot.querySelector('.mp-player-status').className = 'mp-player-status bankrupt';
             const handsEl = slot.querySelector('.mp-player-hands');
             if (handsEl) handsEl.innerHTML = '';
+            const betChipsEl = slot.querySelector('.mp-player-bet-chips');
+            if (betChipsEl) betChipsEl.innerHTML = '';
+            mpBetChipsSettled.add(pid);
             return;
         }
-        
+
         // Aktualizuj tekstowe elementy (bez niszczenia kart)
         slot.querySelector('.mp-player-name').textContent = `${p.name}${isMe ? ' (Ty)' : ''}`;
         slot.querySelector('.mp-player-chips').textContent = `💰 ${p.chips}`;
-        
+
         // Bet - pokaż insurance jeśli wykupione
         let betText = `🎯 ${p.bet}`;
         if (p.insurance > 0) betText += ` | 🛡️ ${p.insurance}`;
         slot.querySelector('.mp-player-bet').textContent = betText;
         slot.querySelector('.mp-player-status').textContent = statusText;
         slot.querySelector('.mp-player-status').className = 'mp-player-status' + (p.status === 'ready' ? ' ready' : '') + (p.status === 'waiting' ? ' waiting' : '');
-        
+
+        // Wizualne żetony zakładu - przebudowuj tylko gdy kwota się zmieniła (a nie właśnie odleciała po rozliczeniu rundy)
+        const betChipsEl = slot.querySelector('.mp-player-bet-chips');
+        if (betChipsEl) {
+            const betKey = String(p.bet || 0);
+            if (!mpBetChipsSettled.has(pid) && slot.dataset.betKey !== betKey) {
+                betChipsEl.innerHTML = '';
+                chipDenominationsFor(p.bet || 0).forEach(v => betChipsEl.appendChild(createChipElement(v)));
+                slot.dataset.betKey = betKey;
+            }
+        }
+
         // Karty - obsługa split hands
         const handsEl = slot.querySelector('.mp-player-hands');
         

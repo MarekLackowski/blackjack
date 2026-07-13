@@ -113,9 +113,101 @@ function createCardElementWithAnimation(card, hidden = false, index = 0) {
 
 function createChipElement(value) {
     const div = document.createElement('div');
-    div.className = `chip chip-${value}`;
+    let colorClass = 'chip-10';
+    if (value >= 100) colorClass = 'chip-100';
+    else if (value >= 50) colorClass = 'chip-50';
+    else if (value >= 25) colorClass = 'chip-25';
+    div.className = `chip ${colorClass}`;
     div.textContent = value;
     return div;
+}
+
+// Rozkłada kwotę na żetony (100/50/25/10 + ewentualna reszta)
+function chipDenominationsFor(amount) {
+    const values = [100, 50, 25, 10];
+    const result = [];
+    let remaining = Math.round(amount);
+    for (const v of values) {
+        while (remaining >= v) {
+            result.push(v);
+            remaining -= v;
+        }
+    }
+    if (remaining > 0) result.push(remaining);
+    return result;
+}
+
+// Fizycznie animuje pojedynczy element żetonu z jednego miejsca w drugie, po czym go usuwa
+function flyChipBetween(chipEl, fromRect, toRect, onArrive) {
+    document.body.appendChild(chipEl);
+    chipEl.style.position = 'fixed';
+    chipEl.style.left = fromRect.left + 'px';
+    chipEl.style.top = fromRect.top + 'px';
+    chipEl.style.margin = '0';
+    chipEl.style.zIndex = '600';
+    chipEl.style.animation = 'none';
+    chipEl.style.transition = 'none';
+    void chipEl.offsetWidth; // wymuszenie reflow przed startem animacji
+    requestAnimationFrame(() => {
+        chipEl.style.transition = 'transform 0.5s cubic-bezier(0.4,0,0.2,1), opacity 0.5s ease-in';
+        const dx = (toRect.left + toRect.width / 2) - (fromRect.left + fromRect.width / 2);
+        const dy = (toRect.top + toRect.height / 2) - (fromRect.top + fromRect.height / 2);
+        chipEl.style.transform = `translate(${dx}px, ${dy}px) scale(0.5)`;
+        chipEl.style.opacity = '0.2';
+    });
+    setTimeout(() => {
+        chipEl.remove();
+        if (onArrive) onArrive();
+    }, 520);
+}
+
+// Tworzy jeden nowy żeton i animuje go z fromEl do toEl; deposit=true zostawia trwały żeton w toEl po dolocie
+function flyChip(value, fromEl, toEl, deposit, onArrive) {
+    if (!fromEl || !toEl) {
+        if (deposit && toEl) toEl.appendChild(createChipElement(value));
+        if (onArrive) onArrive();
+        return;
+    }
+    const chipEl = createChipElement(value);
+    const fromRect = fromEl.getBoundingClientRect();
+    const toRect = toEl.getBoundingClientRect();
+    flyChipBetween(chipEl, fromRect, toRect, () => {
+        if (deposit) toEl.appendChild(createChipElement(value));
+        if (onArrive) onArrive();
+    });
+}
+
+// Animuje ISTNIEJĄCE żetony z kontenera źródłowego do celu, po kolei, znikają po dotarciu (np. wypłata/przegrana)
+function flyContainerChipsTo(sourceEl, destEl, onAllDone) {
+    if (!sourceEl) { if (onAllDone) onAllDone(); return; }
+    const chips = Array.from(sourceEl.children);
+    if (chips.length === 0) { if (onAllDone) onAllDone(); return; }
+    const destRect = destEl ? destEl.getBoundingClientRect() : null;
+    let remaining = chips.length;
+    chips.forEach((chipEl, idx) => {
+        setTimeout(() => {
+            const fromRect = chipEl.getBoundingClientRect();
+            flyChipBetween(chipEl, fromRect, destRect || fromRect, () => {
+                remaining--;
+                if (remaining === 0 && onAllDone) onAllDone();
+            });
+        }, idx * 120);
+    });
+}
+
+// Rozkłada kwotę na żetony i animuje je pojedynczo (po kolei) z fromEl do toEl
+function flyNewChipsAmount(amount, fromEl, toEl, deposit, onAllDone) {
+    const denominations = chipDenominationsFor(amount);
+    if (denominations.length === 0) { if (onAllDone) onAllDone(); return; }
+    let remaining = denominations.length;
+    denominations.forEach((value, idx) => {
+        setTimeout(() => {
+            flyChip(value, fromEl, toEl, deposit, () => {
+                remaining--;
+                if (remaining === 0 && onAllDone) onAllDone();
+            });
+        }, idx * 120);
+    });
 }
 
 // ===== SINGLEPLAYER GAME =====
@@ -304,7 +396,10 @@ function placeBet(amount) {
     }
     spCurrentBet += amount;
     updateSingleplayerUI();
-    updatePotArea();
+
+    const sourceBtn = document.querySelector('.chip-btn.chip-' + amount);
+    const pot = document.getElementById('pot-area');
+    flyChip(amount, sourceBtn, pot, true);
 }
 
 function clearBet() {
@@ -326,16 +421,7 @@ function clearBet() {
 function updatePotArea() {
     const pot = document.getElementById('pot-area');
     pot.innerHTML = '';
-    if (spCurrentBet > 0) {
-        let remaining = spCurrentBet;
-        const values = [100, 50, 25, 10];
-        for (const v of values) {
-            while (remaining >= v) {
-                pot.appendChild(createChipElement(v));
-                remaining -= v;
-            }
-        }
-    }
+    chipDenominationsFor(spCurrentBet).forEach(v => pot.appendChild(createChipElement(v)));
 }
 
 function showMessage(msg, type = '') {
@@ -421,6 +507,25 @@ function deal() {
     }
 }
 
+// Animuje żetony z puli w stronę gracza (wygrana/push) lub dealera (przegrana) po rozstrzygnięciu rundy
+function animateRoundChips(messageType, totalBet, totalCredited) {
+    const potEl = document.getElementById('pot-area');
+    const chipsDisplay = document.getElementById('player-chips');
+    const dealerAreaEl = document.getElementById('dealer-area');
+
+    if (messageType === 'lose-message') {
+        flyContainerChipsTo(potEl, dealerAreaEl);
+    } else if (messageType === 'push-message') {
+        flyContainerChipsTo(potEl, chipsDisplay);
+    } else if (messageType === 'win-message') {
+        flyContainerChipsTo(potEl, chipsDisplay);
+        const profit = totalCredited - totalBet;
+        if (profit > 0) {
+            flyNewChipsAmount(profit, dealerAreaEl, chipsDisplay, false);
+        }
+    }
+}
+
 function resolveNaturalBlackjack(playerHasBlackjack, dealerHasBlackjack) {
     document.getElementById('game-controls').style.display = 'none';
     document.getElementById('betting-controls').style.display = 'none';
@@ -428,24 +533,27 @@ function resolveNaturalBlackjack(playerHasBlackjack, dealerHasBlackjack) {
     spPlayerStood = true;
     updateSingleplayerUI();
 
+    const betAmount = spCurrentBet;
     let message = '';
     let messageType = '';
+    let winAmount = 0;
 
     if (playerHasBlackjack && dealerHasBlackjack) {
-        spPlayerChips += spCurrentBet;
+        spPlayerChips += betAmount;
         message = `🤝 Push`;
         messageType = 'push-message';
     } else if (playerHasBlackjack) {
-        const winAmount = Math.floor(spCurrentBet * 2.5);
+        winAmount = Math.floor(betAmount * 2.5);
         spPlayerChips += winAmount;
-        message = `🎉 +${winAmount - spCurrentBet}`;
+        message = `🎉 +${winAmount - betAmount}`;
         messageType = 'win-message';
     } else {
-        message = `😞 -${spCurrentBet}`;
+        message = `😞 -${betAmount}`;
         messageType = 'lose-message';
     }
 
     showMessage(message, messageType);
+    animateRoundChips(messageType, betAmount, winAmount);
 
     spGameActive = false;
     spCurrentBet = 0;
@@ -523,11 +631,16 @@ function playerStand() {
 
 function playerDouble() {
     if (!spGameActive || spSplitHands || spPlayerHand.length !== 2 || spPlayerChips < spCurrentBet) return;
-    
+
+    const additionalBet = spCurrentBet;
     spPlayerChips -= spCurrentBet;
     spCurrentBet *= 2;
     spPlayerHand.push(spDeck.draw());
-    
+
+    const chipsDisplay = document.getElementById('player-chips');
+    const pot = document.getElementById('pot-area');
+    flyNewChipsAmount(additionalBet, chipsDisplay, pot, true);
+
     updateSingleplayerUI();
     
     const total = calculateHand(spPlayerHand);
@@ -654,32 +767,33 @@ function dealerTurn() {
 function resolveSingleplayerGame(fromDealerTurn = false) {
     const playerTotal = calculateHand(spPlayerHand);
     const dealerTotal = calculateHand(spDealerHand);
-    
+    const betAmount = spCurrentBet;
+
     let message = '';
     let messageType = '';
-    let winAmount = 0;
-    
+    let totalBet = betAmount;
+    let totalCredited = 0;
+
     if (spSplitHands) {
-        let wins = 0, losses = 0, pushes = 0;
         let winChips = 0;
+        totalBet = spSplitHands.length * betAmount;
         for (let i = 0; i < spSplitHands.length; i++) {
             const hand = spSplitHands[i];
             const total = calculateHand(hand);
             if (total > 21) {
-                losses++;
+                // strata
             } else if (dealerTotal > 21 || total > dealerTotal) {
-                wins++;
-                winChips += spCurrentBet * 2;
+                winChips += betAmount * 2;
             } else if (total < dealerTotal) {
-                losses++;
+                // strata
             } else {
-                pushes++;
-                winChips += spCurrentBet;
+                winChips += betAmount;
             }
         }
         spPlayerChips += winChips;
-        
-        const netResult = winChips - (spSplitHands.length * spCurrentBet);
+        totalCredited = winChips;
+
+        const netResult = winChips - totalBet;
         if (netResult > 0) {
             message = `🎉 +${netResult}`;
             messageType = 'win-message';
@@ -692,37 +806,42 @@ function resolveSingleplayerGame(fromDealerTurn = false) {
         }
     } else {
         if (isBlackjack(spPlayerHand)) {
-            winAmount = Math.floor(spCurrentBet * 2.5);
+            const winAmount = Math.floor(betAmount * 2.5);
             spPlayerChips += winAmount;
-            message = `🎉 +${winAmount - spCurrentBet}`;
+            message = `🎉 +${winAmount - betAmount}`;
             messageType = 'win-message';
+            totalCredited = winAmount;
         } else if (playerTotal > 21) {
-            message = `😞 -${spCurrentBet}`;
+            message = `😞 -${betAmount}`;
             messageType = 'lose-message';
         } else if (dealerTotal > 21) {
-            winAmount = spCurrentBet * 2;
+            const winAmount = betAmount * 2;
             spPlayerChips += winAmount;
-            message = `🎉 +${winAmount - spCurrentBet}`;
+            message = `🎉 +${winAmount - betAmount}`;
             messageType = 'win-message';
+            totalCredited = winAmount;
         } else if (playerTotal > dealerTotal) {
-            winAmount = spCurrentBet * 2;
+            const winAmount = betAmount * 2;
             spPlayerChips += winAmount;
-            message = `🎉 +${winAmount - spCurrentBet}`;
+            message = `🎉 +${winAmount - betAmount}`;
             messageType = 'win-message';
+            totalCredited = winAmount;
         } else if (playerTotal < dealerTotal) {
-            message = `😞 -${spCurrentBet}`;
+            message = `😞 -${betAmount}`;
             messageType = 'lose-message';
         } else {
-            winAmount = spCurrentBet;
+            const winAmount = betAmount;
             spPlayerChips += winAmount;
             message = `🤝 Push`;
             messageType = 'push-message';
+            totalCredited = winAmount;
         }
     }
-    
+
     // Zawsze pokazuj wynik końcowy, nadpisując poprzedni komunikat
     showMessage(message, messageType);
-    
+    animateRoundChips(messageType, totalBet, totalCredited);
+
     spGameActive = false;
     spCurrentBet = 0;
     updateSingleplayerUI();
@@ -751,22 +870,26 @@ function endSingleplayerGame(playerWins) {
     
     spPlayerStood = true;
     updateSingleplayerUI();
-    
+
+    const betAmount = spCurrentBet;
     let message = '';
     let messageType = '';
+    let totalCredited = 0;
 
     if (playerWins) {
-        const winAmount = spCurrentBet * 2;
+        const winAmount = betAmount * 2;
         spPlayerChips += winAmount;
-        message = `🎉 +${winAmount - spCurrentBet}`;
+        message = `🎉 +${winAmount - betAmount}`;
         messageType = 'win-message';
+        totalCredited = winAmount;
     } else {
-        message = `😞 -${spCurrentBet}`;
+        message = `😞 -${betAmount}`;
         messageType = 'lose-message';
     }
 
     showMessage(message, messageType);
-    
+    animateRoundChips(messageType, betAmount, totalCredited);
+
     spGameActive = false;
     spCurrentBet = 0;
     updateSingleplayerUI();
