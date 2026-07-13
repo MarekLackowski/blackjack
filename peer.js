@@ -1076,10 +1076,19 @@ function mpShowMyTurn() {
 
 // ===================== AKCJE GRACZA =====================
 
+// Natychmiastowa informacja zwrotna dla gościa: host przetwarza swoje akcje lokalnie (0 opóźnienia),
+// a gość musi poczekać na odpowiedź hosta - bez tego przyciski "wisiały" bez reakcji do czasu odpowiedzi.
+function mpLockControlsWhileWaiting() {
+    document.getElementById('mp-game-controls').style.display = 'none';
+    document.getElementById('mp-insurance-controls').style.display = 'none';
+    document.getElementById('mp-waiting').style.display = 'block';
+    document.getElementById('mp-waiting').textContent = 'Wysyłanie akcji...';
+}
+
 function mpHit() {
     if (mpPhase !== 'playing') return;
     if (mpCurrentPlayerId !== mpMyId) return;
-    
+
     if (mpIsHost) {
         mpProcessAction(mpMyId, 'hit');
     } else {
@@ -1087,13 +1096,14 @@ function mpHit() {
         if (hostConn && hostConn.open) {
             hostConn.send({ type: 'action', action: 'hit' });
         }
+        mpLockControlsWhileWaiting();
     }
 }
 
 function mpStand() {
     if (mpPhase !== 'playing') return;
     if (mpCurrentPlayerId !== mpMyId) return;
-    
+
     if (mpIsHost) {
         mpProcessAction(mpMyId, 'stand');
     } else {
@@ -1101,16 +1111,17 @@ function mpStand() {
         if (hostConn && hostConn.open) {
             hostConn.send({ type: 'action', action: 'stand' });
         }
+        mpLockControlsWhileWaiting();
     }
 }
 
 function mpDouble() {
     if (mpPhase !== 'playing') return;
     if (mpCurrentPlayerId !== mpMyId) return;
-    
+
     const me = mpAllPlayers[mpMyId];
     if (!me || me.hand.length !== 2 || me.chips < me.bet) return;
-    
+
     if (mpIsHost) {
         mpProcessAction(mpMyId, 'double');
     } else {
@@ -1118,6 +1129,7 @@ function mpDouble() {
         if (hostConn && hostConn.open) {
             hostConn.send({ type: 'action', action: 'double' });
         }
+        mpLockControlsWhileWaiting();
     }
 }
 
@@ -1278,6 +1290,7 @@ function mpSplit() {
         if (hostConn && hostConn.open) {
             hostConn.send({ type: 'action', action: 'split' });
         }
+        mpLockControlsWhileWaiting();
     }
 }
 
@@ -1458,11 +1471,12 @@ function mpCalculateResults() {
         }
     }
     mpUpdateGameUI();
-    
+    mpAnimateResultsChips(results);
+
     if (results[mpMyId]) {
         mpShowMessage(results[mpMyId].message);
     }
-    
+
     setTimeout(() => {
         mpBroadcast({ type: 'new_round' });
         mpResetRound();
