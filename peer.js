@@ -592,21 +592,16 @@ function mpHandleData(fromId, data) {
         case 'insurance_offer':
             mpPhase = 'insurance';
             mpDealerHand = data.dealer || mpDealerHand;
-            mpCurrentPlayerId = data.playerId || null;
+            mpCurrentPlayerId = null;
             mpUpdateGameUI();
             break;
-            
-        case 'insurance_end':
-            mpPhase = 'playing';
-            mpUpdateGameUI();
-            break;
-            
+
         case 'insurance_taken':
-            if (mpIsHost && mpAllPlayers[fromId]) {
+            if (mpIsHost && mpAllPlayers[fromId] && mpAllPlayers[fromId].insurance === null) {
                 mpAllPlayers[fromId].insurance = data.amount;
                 mpAllPlayers[fromId].chips -= data.amount;
                 mpBroadcast({ type: 'state', players: mpAllPlayers });
-                mpProcessInsuranceDone(fromId);
+                mpCheckAllInsuranceDecided();
             }
             break;
             
@@ -859,56 +854,85 @@ function mpCheckAllBetsPlaced() {
         hands: hands,
         players: mpAllPlayers
     });
-    
+
     mpUpdateGameUI();
-    
-    mpCurrentPlayerIndex = -1;
-    mpStartNextPlayerTurn();
+
+    if (mpDealerHand[0].rank === 'A') {
+        mpStartInsurancePhase();
+    } else {
+        mpCurrentPlayerIndex = -1;
+        mpStartNextPlayerTurn();
+    }
 }
 
 // ===================== INSURANCE =====================
 
-function mpProcessInsuranceDone(playerId) {
+// Gracze uprawnieni do decyzji o insurance (biorą udział w rundzie, mają wyjściową parę kart)
+function mpInsuranceEligiblePlayers() {
+    return Object.values(mpAllPlayers).filter(p =>
+        p.status !== 'waiting' && p.status !== 'bankrupt' && p.hand && p.hand.length === 2
+    );
+}
+
+// Insurance jest oferowane WSZYSTKIM uprawnionym graczom naraz (nie po kolei, jak turury hit/stand)
+function mpStartInsurancePhase() {
     if (!mpIsHost) return;
-    
-    // Sprawdź czy to był ostatni gracz (pomijamy bankrupt)
-    const hostId = Object.keys(mpAllPlayers).find(id => mpAllPlayers[id].isHost);
-    const playerIds = [];
-    if (hostId && mpAllPlayers[hostId].status !== 'waiting' && mpAllPlayers[hostId].status !== 'bankrupt') playerIds.push(hostId);
-    Object.keys(mpAllPlayers).forEach(id => {
-        if (!mpAllPlayers[id].isHost && mpAllPlayers[id].status !== 'waiting' && mpAllPlayers[id].status !== 'bankrupt') {
-            playerIds.push(id);
-        }
-    });
-    
-    const currentIdx = playerIds.indexOf(playerId);
-    const isLastPlayer = currentIdx === playerIds.length - 1;
-    
-    if (isLastPlayer) {
-        // Sprawdź czy dealer ma blackjack
-        const dealerHasBlackjack = isBlackjack(mpDealerHand);
-        if (dealerHasBlackjack) {
-            mpBroadcast({ type: 'dealer_blackjack', message: 'Dealer ma Blackjack! Insurance wygrywa.' });
-            mpHandleData(mpMyId, { type: 'dealer_blackjack', message: 'Dealer ma Blackjack! Insurance wygrywa.' });
-            // Wypłać insurance 2:1
-            for (const pid in mpAllPlayers) {
-                const p = mpAllPlayers[pid];
-                if (p.insurance > 0) {
-                    p.chips += p.insurance * 3;
-                }
+
+    mpPhase = 'insurance';
+    mpCurrentPlayerId = null;
+
+    mpBroadcast({ type: 'insurance_offer', dealer: mpDealerHand });
+    mpHandleData(mpMyId, { type: 'insurance_offer', dealer: mpDealerHand });
+
+    // Jeśli ktoś nie zdecyduje w 10s, auto-decline dla niego
+    setTimeout(() => {
+        if (mpPhase !== 'insurance') return;
+        let changed = false;
+        mpInsuranceEligiblePlayers().forEach(p => {
+            if (p.insurance === null) {
+                p.insurance = 0;
+                changed = true;
             }
+        });
+        if (changed) {
             mpBroadcast({ type: 'state', players: mpAllPlayers });
-            setTimeout(() => mpCalculateResults(), 2000);
-            return;
         }
+        mpResolveInsurancePhase();
+    }, 10000);
+}
+
+function mpCheckAllInsuranceDecided() {
+    if (!mpIsHost) return;
+    if (mpPhase !== 'insurance') return;
+
+    const stillDeciding = mpInsuranceEligiblePlayers().some(p => p.insurance === null);
+    if (stillDeciding) return;
+
+    mpResolveInsurancePhase();
+}
+
+function mpResolveInsurancePhase() {
+    if (!mpIsHost) return;
+    if (mpPhase !== 'insurance') return; // już rozwiązane (timer + check mogą odpalić się prawie równocześnie)
+
+    const dealerHasBlackjack = isBlackjack(mpDealerHand);
+    if (dealerHasBlackjack) {
+        mpBroadcast({ type: 'dealer_blackjack', message: 'Dealer ma Blackjack! Insurance wygrywa.' });
+        mpHandleData(mpMyId, { type: 'dealer_blackjack', message: 'Dealer ma Blackjack! Insurance wygrywa.' });
+        // Wypłać insurance 2:1
+        for (const pid in mpAllPlayers) {
+            const p = mpAllPlayers[pid];
+            if (p.insurance > 0) {
+                p.chips += p.insurance * 3;
+            }
+        }
+        mpBroadcast({ type: 'state', players: mpAllPlayers });
+        setTimeout(() => mpCalculateResults(), 2000);
+        return;
     }
-    
-    // Kontynuuj do następnego gracza (lub tego samego jeśli był insurance)
-    if (isLastPlayer) {
-        mpCurrentPlayerIndex = -1;
-    } else {
-        mpCurrentPlayerIndex = currentIdx;
-    }
+
+    mpPhase = 'playing';
+    mpCurrentPlayerIndex = -1;
     mpStartNextPlayerTurn();
 }
 
@@ -916,14 +940,14 @@ function mpTakeInsurance() {
     if (mpPhase !== 'insurance') return;
     
     const me = mpAllPlayers[mpMyId];
-    if (!me) return;
-    
+    if (!me || me.insurance !== null) return;
+
     const insuranceAmount = Math.floor(me.bet / 2);
     if (insuranceAmount > me.chips) {
         mpShowMessage('Za mało żetonów na insurance!');
         return;
     }
-    
+
     if (!mpIsHost) {
         const hostConn = mpConns[0];
         if (hostConn && hostConn.open) {
@@ -937,18 +961,18 @@ function mpTakeInsurance() {
         me.chips -= insuranceAmount;
         mpBroadcast({ type: 'state', players: mpAllPlayers });
         mpUpdateGameUI();
-        mpProcessInsuranceDone(mpMyId);
+        mpCheckAllInsuranceDecided();
     }
 }
 
 function mpDeclineInsurance() {
     if (mpPhase !== 'insurance') return;
-    
+
     const me = mpAllPlayers[mpMyId];
-    if (!me) return;
-    
+    if (!me || me.insurance !== null) return;
+
     me.insurance = 0; // Oznacz jako "zdecydowane" (declined)
-    
+
     if (!mpIsHost) {
         const hostConn = mpConns[0];
         if (hostConn && hostConn.open) {
@@ -958,7 +982,7 @@ function mpDeclineInsurance() {
     } else {
         mpBroadcast({ type: 'state', players: mpAllPlayers });
         mpUpdateGameUI();
-        mpProcessInsuranceDone(mpMyId);
+        mpCheckAllInsuranceDecided();
     }
 }
 
@@ -1001,28 +1025,6 @@ function mpStartNextPlayerTurn() {
         mpBroadcast({ type: 'state', players: mpAllPlayers });
         mpUpdateGameUI(); // Host musi też zaktualizować UI
         setTimeout(() => mpStartNextPlayerTurn(), 1000);
-        return;
-    }
-    
-    // Sprawdź czy dealer ma Asa - oferuj insurance tylko aktualnemu graczowi
-    const dealerHasAce = mpDealerHand[0].rank === 'A';
-    const playerNeedsInsurance = dealerHasAce && p.insurance === null && p.hand.length === 2 && !p.splitHands;
-    
-    if (playerNeedsInsurance) {
-        mpPhase = 'insurance';
-        mpCurrentPlayerId = currentId;
-        mpBroadcast({ type: 'insurance_offer', playerId: currentId, dealer: mpDealerHand });
-        if (currentId === mpMyId) {
-            mpHandleData(mpMyId, { type: 'insurance_offer', playerId: currentId, dealer: mpDealerHand });
-        }
-        // Timer - jeśli gracz nie zdecyduje w 10s, auto-decline
-        setTimeout(() => {
-            if (mpPhase === 'insurance' && mpCurrentPlayerId === currentId && mpAllPlayers[currentId] && mpAllPlayers[currentId].insurance === null) {
-                mpAllPlayers[currentId].insurance = 0; // Oznacz jako declined
-                mpBroadcast({ type: 'state', players: mpAllPlayers });
-                mpProcessInsuranceDone(currentId);
-            }
-        }, 10000);
         return;
     }
     
@@ -1342,7 +1344,7 @@ function mpCalculateResults() {
         let totalLosses = 0;
         let messages = [];
         
-        // Insurance - jeśli dealer ma blackjack, insurance już zostało wypłacone w mpProcessInsuranceDone
+        // Insurance - jeśli dealer ma blackjack, insurance już zostało wypłacone w mpResolveInsurancePhase
         // Jeśli dealer nie ma blackjack, insurance przepada (nic nie dodajemy)
         
         // Sprawdź główną rękę i split hands
@@ -1776,22 +1778,18 @@ function mpUpdateGameUI() {
     } else if (mpPhase === 'insurance') {
         document.getElementById('mp-betting-controls').style.display = 'none';
         document.getElementById('mp-game-controls').style.display = 'none';
-        // Pokaż insurance TYLKO aktualnemu graczowi (mpCurrentPlayerId)
-        if (mpCurrentPlayerId === mpMyId && me && me.insurance === null && me.hand.length === 2 && me.status === 'playing') {
+        // Insurance jest oferowane WSZYSTKIM uprawnionym graczom naraz, nie tylko "aktualnemu"
+        const meNeedsDecision = me && me.insurance === null && me.hand && me.hand.length === 2 && me.status === 'playing';
+        if (meNeedsDecision) {
             document.getElementById('mp-insurance-controls').style.display = 'flex';
             document.getElementById('mp-waiting').style.display = 'none';
-        } else if (mpCurrentPlayerId === mpMyId && me && me.insurance !== null) {
-            // Już zdecydowane - czekaj
-            document.getElementById('mp-insurance-controls').style.display = 'none';
-            document.getElementById('mp-waiting').style.display = 'block';
-            document.getElementById('mp-waiting').textContent = 'Czekam na innych graczy...';
         } else {
             document.getElementById('mp-insurance-controls').style.display = 'none';
             document.getElementById('mp-waiting').style.display = 'block';
-            if (me && me.insurance !== null && me.insurance > 0) {
-                document.getElementById('mp-waiting').textContent = 'Insurance wykupione. Czekam...';
-            } else if (me && me.insurance === null && me.hand.length === 2) {
-                document.getElementById('mp-waiting').textContent = 'Oczekiwanie na decyzję insurance...';
+            if (me && me.insurance > 0) {
+                document.getElementById('mp-waiting').textContent = 'Insurance wykupione. Czekam na innych...';
+            } else if (me && me.insurance === 0) {
+                document.getElementById('mp-waiting').textContent = 'Insurance odrzucone. Czekam na innych...';
             } else {
                 document.getElementById('mp-waiting').textContent = 'Oczekiwanie na innych...';
             }
